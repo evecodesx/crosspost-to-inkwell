@@ -3,7 +3,7 @@
  * Plugin Name:       Crosspost to Inkwell
  * Plugin URI:        https://wordpress.org/plugins/crosspost-to-inkwell
  * Description:       Automatically crossposts WordPress blog posts to your Inkwell.social journal. Requires an Inkwell Plus subscription for API write access.
- * Version:           1.0.0
+ * Version:           1.0.1
  * Author:            evecodes
  * Author URI:        https://github.com/evecodesx
  * License:           GPL-2.0+
@@ -17,7 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'INKWELL_VERSION',     '1.0.0' );
+define( 'INKWELL_VERSION',     '1.0.1' );
 define( 'INKWELL_API_BASE',    'https://api.inkwell.social' );
 define( 'INKWELL_OPTION_KEY',  'inkwell_crosspost_settings' );
 
@@ -226,7 +226,9 @@ function inkwell_register_settings() {
 
 function inkwell_sanitize_settings( $input ) {
 	$clean = [];
-	$clean['api_key']             = sanitize_text_field( trim( $input['api_key'] ?? '' ) );
+	$existing                     = get_option( INKWELL_OPTION_KEY, [] );
+	$submitted_key                = sanitize_text_field( trim( $input['api_key'] ?? '' ) );
+	$clean['api_key']             = '' !== $submitted_key ? $submitted_key : (string) ( $existing['api_key'] ?? '' );
 	$clean['privacy']             = in_array( $input['privacy'] ?? '', [ 'public', 'friends_only', 'private' ], true )
 		? $input['privacy'] : 'public';
 	$clean['default_category']    = sanitize_text_field( trim( $input['default_category'] ?? '' ) );
@@ -239,7 +241,6 @@ function inkwell_sanitize_settings( $input ) {
 	$clean['debug_log_enabled']   = ! empty( $input['debug_log_enabled'] ) ? '1' : '0';
 	// Preserve connected account info — set by verify, not by the settings form.
 	// Use $input values if present (AJAX verify sets them), otherwise keep existing.
-	$existing = get_option( INKWELL_OPTION_KEY, [] );
 	$clean['connected_display_name'] = isset( $input['connected_display_name'] )
 		? wp_kses( $input['connected_display_name'], [] )
 		: wp_kses( $existing['connected_display_name'] ?? '', [] );
@@ -304,7 +305,7 @@ function inkwell_settings_page() {
 									<div style="display:flex;align-items:center;gap:6px;">
 										<input type="password" id="inkwell_api_key"
 											name="<?php echo esc_attr( INKWELL_OPTION_KEY ); ?>[api_key]"
-											value="<?php echo esc_attr( $opts['api_key'] ?? '' ); ?>"
+											value=""
 											class="regular-text" autocomplete="new-password" placeholder="ink_..." />
 										<button type="button" id="inkwell_toggle_key"
 											title="<?php esc_attr_e( 'Show/hide API key', 'crosspost-to-inkwell' ); ?>"
@@ -562,7 +563,23 @@ define( 'INKWELL_DEBUG_LOG_MAX', 200 );
 /**
  * Append a line to the plugin-wide debug log (only when debug logging is on).
  */
+/**
+ * Redact credentials and authorization material before writing debug logs.
+ */
+function inkwell_redact_sensitive_log_data( $message ) {
+	$message = preg_replace( '/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i', 'Bearer [REDACTED]', (string) $message );
+	$message = preg_replace(
+		'/(["\']?(?:api_key|apikey|client_secret|access_token|refresh_token|token|password|authorization)["\']?\s*[:=]\s*["\']?)[^"\'\s,&}]+/i',
+		'$1[REDACTED]',
+		$message
+	);
+	// Inkwell keys have a recognizable prefix; redact them even in unstructured text.
+	$message = preg_replace( '/\bink_[A-Za-z0-9._~-]+/i', 'ink_[REDACTED]', $message );
+	return $message;
+}
+
 function inkwell_debug_log( $message ) {
+	$message = inkwell_redact_sensitive_log_data( (string) $message );
 	$opts = get_option( INKWELL_OPTION_KEY, [] );
 	if ( empty( $opts['debug_log_enabled'] ) || $opts['debug_log_enabled'] !== '1' ) return;
 	$log   = (array) get_option( INKWELL_DEBUG_LOG_KEY, [] );
